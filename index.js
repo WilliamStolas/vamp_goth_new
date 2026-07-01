@@ -1,36 +1,50 @@
 require("dotenv").config();
-const { Telegraf, Markup } = require("telegraf");
-const fs = require("fs");
 
-// =====================
-// ANTI MULTI INSTANCE
-// =====================
-if (global.__BOT__) {
-    console.log("BOT already running");
-    process.exit(0);
-}
+const { Telegraf, Markup } = require("telegraf");
+const express = require("express");
+const fs = require("fs");
+const path = require("path");
+
+// ================= SAFE INSTANCE =================
+if (global.__BOT__) process.exit(0);
 global.__BOT__ = true;
 
-// =====================
-// BOT INIT
-// =====================
-const bot = new Telegraf(process.env.BOT_TOKEN);
+// ================= APP (WEB SERVER) =================
+const app = express();
 
-// =====================
-// DB
-// =====================
-let db = { users: {} };
+app.use(express.json());
+app.use(express.static("webapp"));
+
+// WebApp route (FIX 502)
+app.get("/webapp", (req, res) => {
+    res.sendFile(path.join(__dirname, "webapp", "index.html"));
+});
+
+// health check (Railway)
+app.get("/", (req, res) => {
+    res.send("🖤 GOTH BOT ONLINE");
+});
+
+// ================= BOT =================
+const bot = new Telegraf(process.env.BOT_TOKEN, {
+    handlerTimeout: 90000
+});
+
+// ================= WEBAPP URL =================
+const WEBAPP_URL =
+    process.env.WEBAPP_URL ||
+    "https://vampgothnew-production.up.railway.app/webapp";
+
+// ================= DB =================
+let db = { users: {}, admin: {} };
 
 if (fs.existsSync("db.json")) {
     db = JSON.parse(fs.readFileSync("db.json"));
 }
 
-const saveDB = () =>
+const save = () =>
     fs.writeFileSync("db.json", JSON.stringify(db, null, 2));
 
-// =====================
-// USER INIT
-// =====================
 function user(id) {
     if (!db.users[id]) {
         db.users[id] = {
@@ -39,222 +53,177 @@ function user(id) {
             wins: 0,
             loses: 0,
             fights: 0,
-            energy: 100,
-            lastBoost: 0,
-            launched: false,
-            nft: []
+            lastDaily: 0,
+            banned: false
         };
-        saveDB();
+        save();
     }
     return db.users[id];
 }
 
-// =====================
-// START (LANUCH SCREEN)
-// =====================
+// ================= START =================
 bot.start((ctx) => {
     const u = user(ctx.from.id);
+
+    if (u.banned) return ctx.reply("⛔ You are banned");
 
     ctx.reply(
 `🖤 Salutation
 
 Welcome to GOTH BOT 🍷
 
-Ready to /launch or /more`
+Ready to /launch or /more`,
+        Markup.inlineKeyboard([
+            [Markup.button.webApp("🖤 ENTER PORTAL", WEBAPP_URL)],
+            [Markup.button.callback("📜 MORE", "more")]
+        ])
     );
 });
 
-// =====================
-// LAUNCH SYSTEM (NOTCOIN STYLE)
-// =====================
-bot.command("launch", (ctx) => {
-    const u = user(ctx.from.id);
-
-    u.launched = true;
-    u.coin += 500;
-    saveDB();
-
+// ================= MORE =================
+bot.action("more", (ctx) => {
     ctx.reply(
-`🖤 GOTH LAUNCH ACTIVATED
+`📜 SYSTEM
 
-💎 +500 Chrome Hearts
-
-Tap to earn:
-👉 /tap
-
-Boost:
-👉 /boost
-
-Shop:
-👉 /shop
-
-Fight:
-👉 /fight`
+/daily
+/profile
+/fight
+/shop
+/admin`
     );
 });
 
-// =====================
-// TAP SYSTEM (MINING)
-// =====================
-bot.command("tap", (ctx) => {
+// ================= DAILY =================
+bot.command("daily", (ctx) => {
     const u = user(ctx.from.id);
 
-    if (!u.launched) return ctx.reply("🔒 launch first");
+    if (Date.now() - u.lastDaily < 86400000)
+        return ctx.reply("⏳ Already claimed");
 
-    if (u.energy <= 0)
-        return ctx.reply("⚡ energy empty");
+    u.lastDaily = Date.now();
+    u.coin += 200;
 
-    u.coin += 50;
-    u.energy -= 10;
-
-    saveDB();
-
-    ctx.reply("💎 +50 Chrome Hearts");
+    save();
+    ctx.reply("🎁 +200 COIN");
 });
 
-// =====================
-// BOOST (DRINK RED WINE)
-// =====================
-bot.command("boost", (ctx) => {
-    const u = user(ctx.from.id);
-
-    const now = Date.now();
-    if (now - u.lastBoost < 3600000) {
-        return ctx.reply("⏳ wait 1 hour");
-    }
-
-    const reward = 500;
-
-    u.coin += reward;
-    u.lastBoost = now;
-
-    saveDB();
-
-    ctx.reply(`🍷 Drink Red Wine
-💎 +${reward} Coins`);
-});
-
-// =====================
-// PROFILE
-// =====================
+// ================= PROFILE =================
 bot.command("profile", (ctx) => {
     const u = user(ctx.from.id);
 
     ctx.reply(
 `🖤 PROFILE
 
-💎 Coins: ${u.coin}
-⚡ Energy: ${u.energy}
-⚔️ Fights: ${u.fights}
-🏆 Wins: ${u.wins}
-💀 Loses: ${u.loses}`
+💰 Coin: ${u.coin}
+🥈 Silver: ${u.silver}
+⚔ Wins: ${u.wins}
+💀 Loses: ${u.loses}
+🔥 Fights: ${u.fights}`
     );
 });
 
-// =====================
-// SHOP (TON READY)
-// =====================
-bot.command("shop", (ctx) => {
-    const u = user(ctx.from.id);
-
-    if (!u.launched) return ctx.reply("🔒 launch first");
-
-    ctx.reply(
-`🛒 GOTH SHOP
-
-💎 Items:
-- HP Boost
-- Energy Drink
-- Chrome Hearts Skins
-- Dracula Cloaks
-- Silver Coin Packs
-
-Use:
-/buy <item>`
-    );
-});
-
-// =====================
-// NFT MARKET
-// =====================
-bot.command("buy", (ctx) => {
-    const u = user(ctx.from.id);
-
-    ctx.reply(
-`🧬 NFT MARKET
-
-⚔ Sword NFT
-🍷 Wine NFT
-💍 Chrome Hearts
-🧥 Dracula Cloaks
-💎 Silver Artifacts
-
-+ Add Custom NFT (TON READY)`
-    );
-});
-
-// =====================
-// FIGHT SYSTEM (UPGRADED)
-// =====================
+// ================= FIGHT =================
 bot.command("fight", (ctx) => {
     const u = user(ctx.from.id);
 
+    const win = Math.random() > 0.5;
     u.fights++;
-
-    const win = Math.random() > 0.45;
 
     if (win) {
         u.wins++;
         u.coin += 100;
-        ctx.reply("⚔ YOU WON +100 💎");
+        ctx.reply("⚔ YOU WON +100");
     } else {
         u.loses++;
         ctx.reply("💀 YOU LOST");
     }
 
-    saveDB();
+    save();
 });
 
-// =====================
-// FRIENDS
-// =====================
-bot.command("friends", (ctx) => {
-    const link = `https://t.me/vampiregothbot?start=ref_${ctx.from.id}`;
-
-    ctx.reply(`👥 Invite friends:
-+ reward per invite
-
-${link}`);
+// ================= SHOP =================
+bot.command("shop", (ctx) => {
+    ctx.reply(
+`🛒 NFT SHOP`,
+        Markup.inlineKeyboard([
+            [Markup.button.webApp("OPEN SHOP 🖤", WEBAPP_URL)]
+        ])
+    );
 });
 
-// =====================
-// ADMIN (CLEAN)
-// =====================
-const ADMIN_IDS = (process.env.ADMIN_IDS || "").split(",");
+// ================= ADMIN PANEL =================
+const ADMINS = [process.env.ADMIN_ID];
 
 bot.command("admin", (ctx) => {
-    if (!ADMIN_IDS.includes(String(ctx.from.id)))
-        return ctx.reply("❌ no access");
+    if (!ADMINS.includes(String(ctx.from.id)))
+        return ctx.reply("⛔ No access");
 
-    ctx.reply("👑 ADMIN PANEL READY");
+    ctx.reply(
+`🧠 ADMIN PANEL
+
+/users
+/ban <id>
+/unban <id>`
+    );
 });
 
-// =====================
-// VIRAL SYSTEM
-// =====================
-bot.on("text", (ctx) => {
+bot.command("ban", (ctx) => {
+    if (!ADMINS.includes(String(ctx.from.id))) return;
+
+    const id = ctx.message.text.split(" ")[1];
+    if (!db.users[id]) return;
+
+    db.users[id].banned = true;
+    save();
+
+    ctx.reply("⛔ banned");
+});
+
+bot.command("unban", (ctx) => {
+    if (!ADMINS.includes(String(ctx.from.id))) return;
+
+    const id = ctx.message.text.split(" ")[1];
+    if (!db.users[id]) return;
+
+    db.users[id].banned = false;
+    save();
+
+    ctx.reply("✅ unbanned");
+});
+
+// ================= WEBAPP DATA =================
+bot.on("web_app_data", (ctx) => {
+    const data = JSON.parse(ctx.webAppData.data);
     const u = user(ctx.from.id);
 
-    if (Math.random() > 0.97) {
-        u.coin += 50;
-        saveDB();
-        ctx.reply("🟣 VIRAL +50 💎");
+    if (u.banned) return;
+
+    if (data.type === "tap") {
+        u.coin += data.value || 10;
     }
+
+    if (data.type === "fight") {
+        if (data.result === "win") {
+            u.coin += 100;
+            u.wins++;
+        } else {
+            u.loses++;
+        }
+    }
+
+    if (data.type === "buy_nft") {
+        u.silver += 1;
+    }
+
+    save();
 });
 
-// =====================
-// SAFE LAUNCH
-// =====================
-bot.launch({ dropPendingUpdates: true });
+// ================= LAUNCH =================
+bot.launch({
+    dropPendingUpdates: true
+});
 
-console.log("🖤🔥 GOTH VAMP GAME ONLINE");
+// ================= START SERVER =================
+app.listen(process.env.PORT || 3000, "0.0.0.0", () => {
+    console.log("🖤 SERVER + BOT RUNNING");
+});

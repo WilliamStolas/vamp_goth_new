@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GOTH GTA WORLD</title>
+
+<style>
+body{
+    margin:0;
+    font-family:Arial;
+    background:white;
+    text-align:center;
+}
+
+h1{
+    margin-top:20px;
+}
+
+.card{
+    margin:15px;
+    padding:15px;
+    border:1px solid #ddd;
+    border-radius:12px;
+}
+
+button{
+    padding:12px 18px;
+    margin:8px;
+    border:none;
+    border-radius:10px;
+    cursor:pointer;
+    background:black;
+    color:white;
+}
+</style>
+</head>
+
+<body>
+
+<h1>🖤 GOTH GTA WORLD</h1>
+
+<div id="user"></div>
+
+<div class="card">
+    <h3>💰 TAP SYSTEM</h3>
+    <button onclick="tap()">TAP +10</button>
+</div>
+
+<div class="card">
+    <h3>⚔ FIGHT</h3>
+    <button onclick="fight()">FIGHT PLAYER</button>
+</div>
+
+<div class="card">
+    <h3>🧬 NFT</h3>
+    <button onclick="buyNFT()">BUY NFT</button>
+</div>
+
+<script>
+
+// ================= TELEGRAM INIT =================
+let tg = window.Telegram.WebApp;
+tg.ready();
+
+let user = tg.initDataUnsafe?.user;
+
+document.getElementById("user").innerHTML =
+    "👤 " + (user?.first_name || "Player");
+
+// ================= TAP =================
+function tap(){
+    tg.sendData(JSON.stringify({
+        type:"tap",
+        value:10
+    }));
+}
+
+// ================= FIGHT =================
+function fight(){
+
+    let win = Math.random() > 0.5;
+
+    tg.sendData(JSON.stringify({
+        type:"fight",
+        result: win ? "win" : "lose"
+    }));
+
+    alert(win ? "⚔ YOU WON" : "💀 YOU LOST");
+}
+
+// ================= NFT =================
+function buyNFT(){
+
+    const items = [
+        "Dracula Cloak",
+        "Dark Sword",
+        "Vampire Ring"
+    ];
+
+    let item = items[Math.floor(Math.random()*items.length)];
+
+    tg.sendData(JSON.stringify({
+        type:"buy_nft",
+        item:item
+    }));
+
+    alert("🧬 You got: " + item);
+}
+
+</script>
+
+</body>
+</html>
