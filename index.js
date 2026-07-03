@@ -23,10 +23,15 @@ if (!process.env.BOT_TOKEN) {
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // ================= WEBAPP =================
-const WEBAPP_URL = process.env.WEBAPP_URL;
+const WEBAPP_URL = "https://vampgothnew-production.up.railway.app";
 
 app.use(express.json());
-app.use("/webapp", express.static(path.join(__dirname, "webapp")));
+app.use(express.static(path.join(__dirname, "webapp")));
+
+// 👇 اینو اضافه کن
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "webapp", "index.html"));
+});
 
 // ================= USER =================
 async function getUser(id) {
