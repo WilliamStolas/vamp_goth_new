@@ -1,229 +1,166 @@
 require("dotenv").config();
 
-const { Telegraf, Markup } = require("telegraf");
 const express = require("express");
-const fs = require("fs");
+const { Telegraf, Markup } = require("telegraf");
 const path = require("path");
+const { connectDB, User } = require("./db");
 
-// ================= SAFE INSTANCE =================
-if (global.__BOT__) process.exit(0);
-global.__BOT__ = true;
+// ================= DB =================
+(async () => {
+  try {
+    await connectDB().catch(err => console.log("DB connection failed:", err));
+  } catch (e) {
+    console.log("DB connection failed:", e);
+  }
+})();
 
-// ================= APP (WEB SERVER) =================
 const app = express();
 
-app.use(express.json());
-app.use(express.static("webapp"));
+if (!process.env.BOT_TOKEN) {
+  throw new Error("BOT_TOKEN is missing");
+}
 
-// WebApp route (FIX 502)
-app.get("/webapp", (req, res) => {
-    res.sendFile(path.join(__dirname, "webapp", "index.html"));
+const bot = new Telegraf(process.env.BOT_TOKEN);
+
+// ================= WEBAPP =================
+const WEBAPP_URL = process.env.WEBAPP_URL;
+
+app.use(express.json());
+app.use("/webapp", express.static(path.join(__dirname, "webapp")));
+
+// ================= USER =================
+async function getUser(id) {
+  let user = await User.findOne({ userId: id });
+  if (!user) user = await User.create({ userId: id });
+  return user;
+}
+
+// ================= LOGIN =================
+app.post("/api/login", async (req, res) => {
+  const user = await getUser(req.body.id);
+  res.json({ user });
 });
 
-// health check (Railway)
-app.get("/", (req, res) => {
-    res.send("🖤 GOTH BOT ONLINE");
+// ================= TAP =================
+app.post("/api/tap", async (req, res) => {
+  const user = await getUser(req.body.id);
+
+  let reward = user.chromeLevel * 50;
+
+  if (Date.now() - user.lastBoost < 30 * 60 * 1000) {
+    reward = 500;
+    user.hp -= 1;
+  }
+
+  user.coin += reward;
+  user.silver += reward;
+
+  await user.save();
+
+  res.json(user);
+});
+
+// ================= BOOST =================
+app.post("/api/boost", async (req, res) => {
+  const user = await getUser(req.body.id);
+
+  if (Date.now() - user.lastBoost < 30 * 60 * 1000) {
+    return res.json({ error: "cooldown" });
+  }
+
+  user.lastBoost = Date.now();
+  user.hp += 50;
+
+  await user.save();
+
+  res.json({ user });
+});
+
+// ================= WHEEL =================
+app.post("/api/wheel", async (req, res) => {
+  const user = await getUser(req.body.id);
+
+  if (Date.now() - user.lastWheel < 86400000) {
+    return res.json({ error: "cooldown" });
+  }
+
+  user.lastWheel = Date.now();
+
+  const rewards = [
+    1000, 5000, 10000, 50000,
+    100000, 500000,
+    1000000, 5000000, 10000000
+  ];
+
+  const win = rewards[Math.floor(Math.random() * rewards.length)];
+  user.coin += win;
+
+  await user.save();
+
+  res.json({ win, user });
+});
+
+// ================= REF =================
+app.post("/api/ref", async (req, res) => {
+  const { id, ref } = req.body;
+
+  const user = await getUser(id);
+
+  if (ref && ref !== id) {
+    const refUser = await getUser(ref);
+
+    refUser.coin += 200;
+    refUser.referralCount += 1;
+
+    user.referredBy = ref;
+
+    await refUser.save();
+    await user.save();
+  }
+
+  res.json({ ok: true });
 });
 
 // ================= BOT =================
-const bot = new Telegraf(process.env.BOT_TOKEN, {
-    handlerTimeout: 90000
-});
+if (process.env.BOT_TOKEN) {
+  bot.start(async (ctx) => {
+    const id = ctx.from.id;
+    await getUser(id);
 
-// ================= WEBAPP URL =================
-const WEBAPP_URL =
-    process.env.WEBAPP_URL ||
-    "https://vampgothnew-production.up.railway.app/webapp";
-
-// ================= DB =================
-let db = { users: {}, admin: {} };
-
-if (fs.existsSync("db.json")) {
-    db = JSON.parse(fs.readFileSync("db.json"));
-}
-
-const save = () =>
-    fs.writeFileSync("db.json", JSON.stringify(db, null, 2));
-
-function user(id) {
-    if (!db.users[id]) {
-        db.users[id] = {
-            coin: 0,
-            silver: 0,
-            wins: 0,
-            loses: 0,
-            fights: 0,
-            lastDaily: 0,
-            banned: false
-        };
-        save();
-    }
-    return db.users[id];
-}
-
-// ================= START =================
-bot.start((ctx) => {
-    const u = user(ctx.from.id);
-
-    if (u.banned) return ctx.reply("⛔ You are banned");
+    const link = `https://t.me/${ctx.botInfo.username}?start=${id}`;
 
     ctx.reply(
-`🖤 Salutation
+      `🖤 Salutation
+Welcome to Your Castel 🍷
 
-Welcome to GOTH BOT 🍷
-
-Ready to /launch or /more`,
-        Markup.inlineKeyboard([
-            [Markup.button.webApp("🖤 ENTER PORTAL", WEBAPP_URL)],
-            [Markup.button.callback("📜 MORE", "more")]
-        ])
+Invite:
+${link}`,
+      Markup.inlineKeyboard([
+        [Markup.button.webApp("ENTER WORLD 🖤", WEBAPP_URL)]
+      ])
     );
-});
+  });
 
-// ================= MORE =================
-bot.action("more", (ctx) => {
-    ctx.reply(
-`📜 SYSTEM
-
-/daily
-/profile
-/fight
-/shop
-/admin`
-    );
-});
-
-// ================= DAILY =================
-bot.command("daily", (ctx) => {
-    const u = user(ctx.from.id);
-
-    if (Date.now() - u.lastDaily < 86400000)
-        return ctx.reply("⏳ Already claimed");
-
-    u.lastDaily = Date.now();
-    u.coin += 200;
-
-    save();
-    ctx.reply("🎁 +200 COIN");
-});
-
-// ================= PROFILE =================
-bot.command("profile", (ctx) => {
-    const u = user(ctx.from.id);
+  bot.command("profile", async (ctx) => {
+    const u = await getUser(ctx.from.id);
 
     ctx.reply(
-`🖤 PROFILE
+      `🧛 PROFILE
 
 💰 Coin: ${u.coin}
 🥈 Silver: ${u.silver}
-⚔ Wins: ${u.wins}
-💀 Loses: ${u.loses}
-🔥 Fights: ${u.fights}`
+🧬 HP: ${u.hp}
+🧥 Chrome Level: ${u.chromeLevel}
+👥 Ref: ${u.referralCount}`
     );
-});
+  });
 
-// ================= FIGHT =================
-bot.command("fight", (ctx) => {
-    const u = user(ctx.from.id);
+  bot.launch();
+}
 
-    const win = Math.random() > 0.5;
-    u.fights++;
+// ================= SERVER =================
+const PORT = process.env.PORT || 3000;
 
-    if (win) {
-        u.wins++;
-        u.coin += 100;
-        ctx.reply("⚔ YOU WON +100");
-    } else {
-        u.loses++;
-        ctx.reply("💀 YOU LOST");
-    }
-
-    save();
-});
-
-// ================= SHOP =================
-bot.command("shop", (ctx) => {
-    ctx.reply(
-`🛒 NFT SHOP`,
-        Markup.inlineKeyboard([
-            [Markup.button.webApp("OPEN SHOP 🖤", WEBAPP_URL)]
-        ])
-    );
-});
-
-// ================= ADMIN PANEL =================
-const ADMINS = [process.env.ADMIN_ID];
-
-bot.command("admin", (ctx) => {
-    if (!ADMINS.includes(String(ctx.from.id)))
-        return ctx.reply("⛔ No access");
-
-    ctx.reply(
-`🧠 ADMIN PANEL
-
-/users
-/ban <id>
-/unban <id>`
-    );
-});
-
-bot.command("ban", (ctx) => {
-    if (!ADMINS.includes(String(ctx.from.id))) return;
-
-    const id = ctx.message.text.split(" ")[1];
-    if (!db.users[id]) return;
-
-    db.users[id].banned = true;
-    save();
-
-    ctx.reply("⛔ banned");
-});
-
-bot.command("unban", (ctx) => {
-    if (!ADMINS.includes(String(ctx.from.id))) return;
-
-    const id = ctx.message.text.split(" ")[1];
-    if (!db.users[id]) return;
-
-    db.users[id].banned = false;
-    save();
-
-    ctx.reply("✅ unbanned");
-});
-
-// ================= WEBAPP DATA =================
-bot.on("web_app_data", (ctx) => {
-    const data = JSON.parse(ctx.webAppData.data);
-    const u = user(ctx.from.id);
-
-    if (u.banned) return;
-
-    if (data.type === "tap") {
-        u.coin += data.value || 10;
-    }
-
-    if (data.type === "fight") {
-        if (data.result === "win") {
-            u.coin += 100;
-            u.wins++;
-        } else {
-            u.loses++;
-        }
-    }
-
-    if (data.type === "buy_nft") {
-        u.silver += 1;
-    }
-
-    save();
-});
-
-// ================= LAUNCH =================
-bot.launch({
-    dropPendingUpdates: true
-});
-
-// ================= START SERVER =================
-app.listen(process.env.PORT || 3000, "0.0.0.0", () => {
-    console.log("🖤 SERVER + BOT RUNNING");
+app.listen(PORT, () => {
+  console.log("🟢 SERVER RUNNING ON PORT", PORT);
 });
